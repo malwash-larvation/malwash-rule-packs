@@ -97,11 +97,12 @@ jobs:
             "$BUNDLE/layers/fixtures.tar.gz:application/vnd.malwash.detection.fixtures.v1.tar+gzip" \
             "$BUNDLE/layers/quality.tar.gz:application/vnd.malwash.detection.quality.v1.tar+gzip" \
             "$BUNDLE/layers/provenance.tar.gz:application/vnd.malwash.detection.provenance.v1.tar+gzip"
-          token=$(curl -fsSL -u "$GITHUB_ACTOR:$CR_PAT" "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull,push" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
-          auth=(-H "Authorization: Bearer $token")
           digest=$(sha256sum "$BUNDLE/external-oci-manifest.json" | awk '{print "sha256:"$1}')
-          curl -fsSL -X PUT "https://ghcr.io/v2/${repository}/manifests/${RELEASE_TAG}" "${auth[@]}" -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' --data-binary "@$BUNDLE/external-oci-manifest.json" >/dev/null
-          curl -fsSL "https://ghcr.io/v2/${repository}/manifests/${digest}" "${auth[@]}" -H 'Accept: application/vnd.oci.image.manifest.v1+json' -o "$RUNNER_TEMP/readback-manifest.json"
+          # Publish the exact canonical manifest through ORAS. A raw registry PUT
+          # can leave GHCR serving the tag while the immutable digest route is not
+          # addressable after retention; the verifier accepts digest-only reads.
+          "$RUNNER_TEMP/oras" manifest push "$IMAGE:$RELEASE_TAG" "$BUNDLE/external-oci-manifest.json"
+          "$RUNNER_TEMP/oras" manifest fetch "$IMAGE@$digest" > "$RUNNER_TEMP/readback-manifest.json"
           cmp "$BUNDLE/external-oci-manifest.json" "$RUNNER_TEMP/readback-manifest.json"
           echo "PACK_DIGEST=$digest" >> "$GITHUB_ENV"
 
