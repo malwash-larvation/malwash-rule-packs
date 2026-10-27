@@ -144,7 +144,7 @@ jobs:
             },
             'rollout': {'stage': stage, 'cohort': {'version': 1, 'salt': pack, 'percentageBps': 1, 'digest': cohort}},
           }
-          pathlib.Path(out).write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\n')
+          pathlib.Path(out).write_text(json.dumps(value, separators=(',', ':'), sort_keys=True))
           PY
           mkdir -p "$RUNNER_TEMP/core-v1-publication"
           cp "$BUNDLE/publication-receipt.json" "$RUNNER_TEMP/core-v1-publication/"
