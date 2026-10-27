@@ -63,6 +63,16 @@ jobs:
           chmod 0755 "$RUNNER_TEMP/cosign"
           "$RUNNER_TEMP/cosign" version
 
+      - name: Install pinned ORAS bootstrap client
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.2.2
+          curl -fsSL "https://github.com/oras-project/oras/releases/download/v${version}/oras_${version}_linux_amd64.tar.gz" -o /tmp/oras.tgz
+          tar -xzf /tmp/oras.tgz -C /tmp oras
+          install -m 0755 /tmp/oras "$RUNNER_TEMP/oras"
+          "$RUNNER_TEMP/oras" version
+
       - name: Login to GHCR
         shell: bash
         env:
@@ -79,6 +89,16 @@ jobs:
           repository="${IMAGE#ghcr.io/}"
           token=$(curl -fsSL -u "$GITHUB_ACTOR:$CR_PAT" "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull,push" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
           auth=(-H "Authorization: Bearer $token")
+          "$RUNNER_TEMP/oras" login ghcr.io -u "$GITHUB_ACTOR" -p "$CR_PAT"
+          "$RUNNER_TEMP/oras" push "$IMAGE:bootstrap-${GITHUB_RUN_ID}" \
+            --artifact-type application/vnd.malwash.detection-pack.v1+json \
+            --config "$BUNDLE/config.json:application/vnd.oci.empty.v1+json" \
+            "$BUNDLE/layers/manifest.tar.gz:application/vnd.malwash.detection.manifest.v1.tar+gzip" \
+            "$BUNDLE/layers/runtime.tar.gz:application/vnd.malwash.detection.runtime.v1.tar+gzip" \
+            "$BUNDLE/layers/catalog.tar.gz:application/vnd.malwash.detection.catalog.v1.tar+gzip" \
+            "$BUNDLE/layers/fixtures.tar.gz:application/vnd.malwash.detection.fixtures.v1.tar+gzip" \
+            "$BUNDLE/layers/quality.tar.gz:application/vnd.malwash.detection.quality.v1.tar+gzip" \
+            "$BUNDLE/layers/provenance.tar.gz:application/vnd.malwash.detection.provenance.v1.tar+gzip"
           upload_blob() {
             local path="$1" digest="$2" upload
             upload=$(curl -fsSL -X POST "https://ghcr.io/v2/${repository}/blobs/uploads/" "${auth[@]}" -H 'Content-Length: 0' -D - -o /dev/null | awk 'BEGIN{IGNORECASE=1} /^Location:/{print $2}' | tr -d '\r')
