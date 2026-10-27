@@ -110,7 +110,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/cosign" sign --yes --recursive "$IMAGE@$PACK_DIGEST"
+          "$RUNNER_TEMP/cosign" sign --yes "$IMAGE@$PACK_DIGEST"
 
       - name: Verify signature and write receipt
         shell: bash
