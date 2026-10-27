@@ -1,0 +1,159 @@
+name: Publish EDR Core v1
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable human-readable release tag
+        required: true
+        type: string
+        default: core-v1-1
+      rollout_stage:
+        description: Initial rollout stage
+        required: true
+        type: choice
+        options: [internal, canary]
+        default: internal
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+  actions: read
+
+env:
+  IMAGE: ghcr.io/malwash-larvation/malwash-rule-packs
+  BUNDLE: artifacts/core-v1
+  COSIGN_VERSION: v3.0.6
+  REKOR_URL: https://rekor.sigstore.dev
+  OIDC_ISSUER: https://token.actions.githubusercontent.com
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate checked-in bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$BUNDLE/external-oci-manifest.json"
+          test -f "$BUNDLE/pack-build-input.json"
+          test -f "$BUNDLE/pack-manifest.json"
+          test -f "$BUNDLE/config.json"
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('artifacts/core-v1')
+          manifest = json.loads((root/'external-oci-manifest.json').read_text())
+          assert manifest['artifactType'] == 'application/vnd.malwash.detection-pack.v1+json'
+          assert len(manifest['layers']) == 6
+          assert hashlib.sha256((root/'config.json').read_bytes()).hexdigest() == manifest['config']['digest'].split(':', 1)[1]
+          for layer in manifest['layers']:
+              path = root/'layers'/next(p for p in ['manifest.tar.gz','runtime.tar.gz','catalog.tar.gz','fixtures.tar.gz','quality.tar.gz','provenance.tar.gz'] if layer['digest'] == 'sha256:'+hashlib.sha256((root/'layers'/p).read_bytes()).hexdigest())
+              assert path.stat().st_size == layer['size']
+          print('BUNDLE_VALID')
+          PY
+
+      - name: Install pinned Cosign
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o "$RUNNER_TEMP/cosign"
+          chmod 0755 "$RUNNER_TEMP/cosign"
+          "$RUNNER_TEMP/cosign" version
+
+      - name: Login to GHCR
+        shell: bash
+        env:
+          CR_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$CR_PAT" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push exact OCI manifest
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CR_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repository="${IMAGE#ghcr.io/}"
+          token=$(curl -fsSL -u "$GITHUB_ACTOR:$CR_PAT" "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull,push" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          auth=(-H "Authorization: Bearer $token")
+          upload_blob() {
+            local path="$1" digest="$2" upload
+            upload=$(curl -fsSL -X POST "https://ghcr.io/v2/${repository}/blobs/uploads/" "${auth[@]}" -H 'Content-Length: 0' -D - -o /dev/null | awk 'BEGIN{IGNORECASE=1} /^Location:/{print $2}' | tr -d '\r')
+            case "$upload" in
+              http*) ;;
+              /*) upload="https://ghcr.io${upload}" ;;
+              *) echo "invalid blob upload location" >&2; exit 1 ;;
+            esac
+            curl -fsSL -X PUT "${upload}&digest=${digest}" "${auth[@]}" -H 'Content-Type: application/octet-stream' --data-binary "@${path}" >/dev/null
+          }
+          config_digest="sha256:$(sha256sum "$BUNDLE/config.json" | awk '{print $1}')"
+          upload_blob "$BUNDLE/config.json" "$config_digest"
+          python3 - "$BUNDLE/external-oci-manifest.json" <<'PY' > "$RUNNER_TEMP/layer-list"
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1]).parent
+          names = {'manifest':'manifest.tar.gz','runtime':'runtime.tar.gz','catalog':'catalog.tar.gz','fixtures':'fixtures.tar.gz','quality':'quality.tar.gz','provenance':'provenance.tar.gz'}
+          manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          for layer in manifest['layers']:
+              role = layer['annotations']['org.malwash.detection.role']
+              print(root/'layers'/names[role], layer['digest'])
+          PY
+          while read -r path digest; do upload_blob "$path" "$digest"; done < "$RUNNER_TEMP/layer-list"
+          digest=$(sha256sum "$BUNDLE/external-oci-manifest.json" | awk '{print "sha256:"$1}')
+          curl -fsSL -X PUT "https://ghcr.io/v2/${repository}/manifests/${RELEASE_TAG}" "${auth[@]}" -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' --data-binary "@$BUNDLE/external-oci-manifest.json" >/dev/null
+          curl -fsSL "https://ghcr.io/v2/${repository}/manifests/${digest}" "${auth[@]}" -H 'Accept: application/vnd.oci.image.manifest.v1+json' -o "$RUNNER_TEMP/readback-manifest.json"
+          cmp "$BUNDLE/external-oci-manifest.json" "$RUNNER_TEMP/readback-manifest.json"
+          echo "PACK_DIGEST=$digest" >> "$GITHUB_ENV"
+
+      - name: Sign immutable digest keylessly
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/cosign" sign --yes --recursive "$IMAGE@$PACK_DIGEST"
+
+      - name: Verify signature and write receipt
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ROLLOUT_STAGE: ${{ inputs.rollout_stage }}
+        run: |
+          set -euo pipefail
+          signer="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-core-v1.yml@refs/heads/${GITHUB_REF_NAME}"
+          "$RUNNER_TEMP/cosign" verify \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/publish-core-v1\.yml@" \
+            "$IMAGE@$PACK_DIGEST" > "$RUNNER_TEMP/cosign-verify.json"
+          build_input_digest="sha256:$(sha256sum "$BUNDLE/pack-build-input.json" | awk '{print $1}')"
+          cohort_digest="sha256:$(printf '%s' "malwash-edr-core-v1:${ROLLOUT_STAGE}" | sha256sum | awk '{print $1}')"
+          python3 - "$BUNDLE/publication-receipt.json" "$PACK_DIGEST" "$build_input_digest" "$signer" "$cohort_digest" "$ROLLOUT_STAGE" <<'PY'
+          import json, pathlib, sys
+          out, pack, build, signer, cohort, stage = sys.argv[1:]
+          value = {
+            'schemaVersion': 1,
+            'kind': 'edr-core-v1-signed-publication-v1',
+            'repository': 'ghcr.io/malwash-larvation/malwash-rule-packs',
+            'packDigest': pack,
+            'buildInputDigest': build,
+            'signature': {
+              'verified': True,
+              'signerIdentity': signer,
+              'oidcIssuer': 'https://token.actions.githubusercontent.com',
+              'rekorUrl': 'https://rekor.sigstore.dev',
+              'cosignVersion': 'v3.0.6',
+              'receiptPath': 'publication-receipt.json',
+            },
+            'rollout': {'stage': stage, 'cohort': {'version': 1, 'salt': pack, 'percentageBps': 1, 'digest': cohort}},
+          }
+          pathlib.Path(out).write_text(json.dumps(value, separators=(',', ':'), sort_keys=True) + '\n')
+          PY
+          mkdir -p "$RUNNER_TEMP/core-v1-publication"
+          cp "$BUNDLE/publication-receipt.json" "$RUNNER_TEMP/core-v1-publication/"
+          cp "$RUNNER_TEMP/cosign-verify.json" "$RUNNER_TEMP/core-v1-publication/"
+
+      - name: Upload signed publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-v1-publication-${{ inputs.release_tag }}
+          path: ${{ runner.temp }}/core-v1-publication
