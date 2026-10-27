@@ -110,7 +110,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/cosign" sign --yes "$IMAGE@$PACK_DIGEST"
+          "$RUNNER_TEMP/cosign" sign --yes --registry-referrers-mode=legacy "$IMAGE@$PACK_DIGEST"
 
       - name: Verify signature and write receipt
         shell: bash
@@ -121,6 +121,7 @@ jobs:
           set -euo pipefail
           signer="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-core-v1.yml@refs/heads/${GITHUB_REF_NAME}"
           "$RUNNER_TEMP/cosign" verify \
+            --registry-referrers-mode=legacy \
             --certificate-oidc-issuer "$OIDC_ISSUER" \
             --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/publish-core-v1\.yml@" \
             "$IMAGE@$PACK_DIGEST" > "$RUNNER_TEMP/cosign-verify.json"
