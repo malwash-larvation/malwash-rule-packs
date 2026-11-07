@@ -118,6 +118,7 @@ jobs:
             --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/publish-core-v1\.yml@" \
             --bundle "$bundle" "$BUNDLE/external-oci-manifest.json"
           "$RUNNER_TEMP/oras" attach "$IMAGE@$PACK_DIGEST" \
+            --disable-path-validation \
             --artifact-type application/vnd.dev.sigstore.bundle.v0.3+json \
             --annotation dev.sigstore.bundle.content=message-signature \
             "$bundle:application/vnd.dev.sigstore.bundle.v0.3+json"
