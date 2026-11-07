@@ -1,1 +1,1 @@
-{"dimensions":[{"kind":"boolean","name":"disable"},{"kind":"boolean","name":"endpoint_exclusion"},{"kind":"cidr","maxEntries":256,"name":"network"},{"kind":"expiring","maximumDurationSeconds":31536000,"name":"sensor-exception"},{"kind":"expiring","maximumDurationSeconds":31536000,"name":"suppression"},{"kind":"integer","maximum":1000000,"minimum":1,"name":"threshold"}],"packRevision":2,"schemaVersion":1}
+{"dimensions":[{"kind":"boolean","name":"disable"},{"kind":"boolean","name":"endpoint_exclusion"}],"packRevision":2,"schemaVersion":1}
