@@ -27,6 +27,7 @@ env:
   COSIGN_VERSION: v3.0.6
   REKOR_URL: https://rekor.sigstore.dev
   OIDC_ISSUER: https://token.actions.githubusercontent.com
+  COSIGN_EXPERIMENTAL: "1"
 
 jobs:
   publish:
