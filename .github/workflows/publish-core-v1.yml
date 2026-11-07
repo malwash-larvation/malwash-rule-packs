@@ -49,15 +49,20 @@ jobs:
           test -f "$BUNDLE/pack-manifest.json"
           test -f "$BUNDLE/config.json"
           python3 - <<'PY'
-          import hashlib, json, pathlib
+          import hashlib, json, pathlib, tarfile, datetime
           root = pathlib.Path('artifacts/core-v1')
           manifest = json.loads((root/'external-oci-manifest.json').read_text())
+          pack = json.loads((root/'pack-manifest.json').read_text())
           assert manifest['artifactType'] == 'application/vnd.malwash.detection-pack.v1+json'
           assert len(manifest['layers']) == 6
           assert hashlib.sha256((root/'config.json').read_bytes()).hexdigest() == manifest['config']['digest'].split(':', 1)[1]
+          built_at = int(datetime.datetime.fromisoformat(pack['deterministicBuild']['builtAt'].replace('Z', '+00:00')).timestamp())
           for layer in manifest['layers']:
               path = root/'layers'/next(p for p in ['manifest.tar.gz','runtime.tar.gz','catalog.tar.gz','fixtures.tar.gz','quality.tar.gz','provenance.tar.gz'] if layer['digest'] == 'sha256:'+hashlib.sha256((root/'layers'/p).read_bytes()).hexdigest())
               assert path.stat().st_size == layer['size']
+              with tarfile.open(path, 'r:gz') as archive:
+                  members = archive.getmembers()
+                  assert members and all(member.mtime == built_at for member in members)
           print('BUNDLE_VALID')
           PY
 
