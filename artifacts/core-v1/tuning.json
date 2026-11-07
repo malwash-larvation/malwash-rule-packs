@@ -1,1 +1,1 @@
-{"dimensions":[{"kind":"boolean","name":"disable"},{"kind":"boolean","name":"endpoint_exclusion"}],"packRevision":2,"schemaVersion":1}
+{"dimensions":[{"kind":"boolean","name":"disable"},{"kind":"boolean","name":"endpoint_exclusion"}],"packRevision":3,"schemaVersion":1}
