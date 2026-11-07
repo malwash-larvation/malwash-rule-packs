@@ -14,6 +14,11 @@ on:
         type: choice
         options: [internal, canary]
         default: internal
+      cohort_salt:
+        description: Reviewed deterministic rollout cohort salt
+        required: true
+        type: string
+        default: edr-core-v1-canary-6259
 
 permissions:
   contents: read
@@ -128,18 +133,25 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
           ROLLOUT_STAGE: ${{ inputs.rollout_stage }}
+          COHORT_SALT: ${{ inputs.cohort_salt }}
         run: |
           set -euo pipefail
+          [[ "$COHORT_SALT" =~ ^[a-z0-9][a-z0-9._-]{2,63}$ ]]
           signer="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-core-v1.yml@refs/heads/${GITHUB_REF_NAME}"
           "$RUNNER_TEMP/cosign" verify-blob \
             --certificate-oidc-issuer "$OIDC_ISSUER" \
             --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/publish-core-v1\.yml@" \
             --bundle "$RUNNER_TEMP/detection-pack.sigstore.json" "$BUNDLE/external-oci-manifest.json" > "$RUNNER_TEMP/cosign-verify.json"
           build_input_digest="sha256:$(sha256sum "$BUNDLE/pack-build-input.json" | awk '{print $1}')"
-          cohort_digest="sha256:$(printf '%s' "malwash-edr-core-v1:${ROLLOUT_STAGE}" | sha256sum | awk '{print $1}')"
-          python3 - "$BUNDLE/publication-receipt.json" "$PACK_DIGEST" "$build_input_digest" "$signer" "$cohort_digest" "$ROLLOUT_STAGE" <<'PY'
+          cohort_digest="sha256:$(python3 - "$COHORT_SALT" <<'PY'
+          import hashlib, json, sys
+          value = {"percentageBps": 1, "salt": sys.argv[1], "version": 1}
+          print(hashlib.sha256(json.dumps(value, separators=(",", ":"), sort_keys=True).encode()).hexdigest())
+          PY
+          )"
+          python3 - "$BUNDLE/publication-receipt.json" "$PACK_DIGEST" "$build_input_digest" "$signer" "$cohort_digest" "$ROLLOUT_STAGE" "$COHORT_SALT" <<'PY'
           import json, pathlib, sys
-          out, pack, build, signer, cohort, stage = sys.argv[1:]
+          out, pack, build, signer, cohort, stage, salt = sys.argv[1:]
           value = {
             'schemaVersion': 1,
             'kind': 'edr-core-v1-signed-publication-v1',
@@ -154,7 +166,7 @@ jobs:
               'cosignVersion': 'v3.0.6',
               'receiptPath': 'publication-receipt.json',
             },
-            'rollout': {'stage': stage, 'cohort': {'version': 1, 'salt': pack, 'percentageBps': 1, 'digest': cohort}},
+            'rollout': {'stage': stage, 'cohort': {'version': 1, 'salt': salt, 'percentageBps': 1, 'digest': cohort}},
           }
           pathlib.Path(out).write_text(json.dumps(value, separators=(',', ':'), sort_keys=True))
           PY
